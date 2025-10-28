@@ -1,0 +1,5 @@
+path: dataset/ui_login
+train: images/train
+val: images/val
+names:
+  - login_button
