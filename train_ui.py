@@ -11,12 +11,13 @@ ROOT = Path(__file__).parent
 def main():
     parser = argparse.ArgumentParser(description="训练自定义UI登录按钮检测模型（YOLO11）")
     parser.add_argument("--data", type=str, default=str(ROOT / "dataset" / "ui_login.yaml"), help="数据配置YAML路径")
-    parser.add_argument("--model", type=str, default=str(ROOT / "yolo11n.pt"), help="预训练模型权重（建议使用yolo11n.pt）")
+    parser.add_argument("--model", type=str, default=str(ROOT / "yolo11n.pt"), help="预训练模型权重（如 yolo11s.pt 更稳）")
     parser.add_argument("--epochs", type=int, default=30, help="训练轮数")
     parser.add_argument("--imgsz", type=int, default=640, help="训练图像尺寸")
     parser.add_argument("--batch", type=int, default=16, help="批大小（CPU上可减小）")
     parser.add_argument("--device", type=str, default="cpu", help="设备：cpu 或 cuda:0 等")
     parser.add_argument("--workers", type=int, default=2, help="DataLoader workers 数量")
+    parser.add_argument("--mosaic", type=float, default=0.2, help="mosaic增强强度，单目标建议降低")
 
     args = parser.parse_args()
 
@@ -42,6 +43,7 @@ def main():
         batch=args.batch,
         device=args.device,
         workers=args.workers,
+        mosaic=args.mosaic,
         verbose=True,
     )
 

@@ -1,8 +1,8 @@
 task: detect
 mode: train
-model: E:\test07\yolo11\yolo11_proj\yolo11n.pt
+model: yolo11s.pt
 data: E:\test07\yolo11\yolo11_proj\dataset\ui_login.yaml
-epochs: 5
+epochs: 30
 time: null
 patience: 100
 batch: 8
@@ -94,7 +94,7 @@ perspective: 0.0
 flipud: 0.0
 fliplr: 0.5
 bgr: 0.0
-mosaic: 1.0
+mosaic: 0.2
 mixup: 0.0
 cutmix: 0.0
 copy_paste: 0.0

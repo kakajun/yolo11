@@ -10,6 +10,12 @@ from PIL import ImageGrab
 import cv2
 from ultralytics import YOLO
 
+# 引入按钮级模板匹配的辅助函数
+from template_detect_button import (
+    build_button_mask_from_template,
+    multi_scale_masked_match,
+)
+
 # 可选依赖（若不存在则退化为固定等待）
 try:
     import win32gui
@@ -128,14 +134,90 @@ def detect_login(model_path: str, frame: np.ndarray, save_dir: Path):
     return info, ann_path
 
 
+def detect_login_by_button_template(template_path: Path, frame: np.ndarray, save_dir: Path,
+                                    threshold: float = 0.6,
+                                    min_scale: float = 0.6,
+                                    max_scale: float = 1.6,
+                                    steps: int = 21,
+                                    h_low: int = 90,
+                                    h_high: int = 130,
+                                    s_low: int = 60,
+                                    v_low: int = 50):
+    """使用带掩码的模板匹配，仅输出登录按钮的精确框与中心。"""
+    if not template_path.exists():
+        raise FileNotFoundError(f"模板不存在: {template_path}")
+    tpl_bgr = cv2.imread(str(template_path), cv2.IMREAD_COLOR)
+    if tpl_bgr is None:
+        raise FileNotFoundError(f"无法读取模板图像: {template_path}")
+
+    button_mask, mask_bbox = build_button_mask_from_template(
+        tpl_bgr, h_low=h_low, h_high=h_high, s_low=s_low, v_low=v_low
+    )
+    if button_mask is None:
+        return None, None
+
+    tpl_gray = cv2.cvtColor(tpl_bgr, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
+    scales = np.linspace(min_scale, max_scale, steps)
+    best = multi_scale_masked_match(gray, tpl_gray, button_mask, scales)
+    score = best['score']
+    x, y = best['loc']
+    s = best['scale']
+
+    bx1 = x + int(mask_bbox[0] * s)
+    by1 = y + int(mask_bbox[1] * s)
+    bx2 = bx1 + int(mask_bbox[2] * s)
+    by2 = by1 + int(mask_bbox[3] * s)
+    h, w = frame.shape[:2]
+
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    ann_path = save_dir / f"annot_button_{ts}.jpg"
+    # 直接保存按钮级标注图
+    vis = frame.copy()
+    cv2.rectangle(vis, (bx1, by1), (bx2, by2), (0, 255, 0), 2)
+    cv2.putText(vis, f"score={score:.2f}", (bx1, max(0, by1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cv2.imwrite(str(ann_path), vis)
+
+    if score < threshold:
+        return None, ann_path
+
+    cx = (bx1 + bx2) / 2.0
+    cy = (by1 + by2) / 2.0
+    norm_x = cx / w
+    norm_y = cy / h
+
+    info = {
+        'center_px': (int(cx), int(cy)),
+        'center_norm': (float(norm_x), float(norm_y)),
+        'bbox_px': (int(bx1), int(by1), int(bx2), int(by2)),
+        'screen_size': (w, h),
+        'conf': float(score),  # 与 YOLO 接口保持一致，使用 score 作为置信度
+    }
+    return info, ann_path
+
+
 def main():
-    parser = argparse.ArgumentParser(description="启动指定程序，等待加载后截屏并用YOLO识别登录按钮位置")
+    parser = argparse.ArgumentParser(description="启动/截屏后进行登录按钮定位（支持 YOLO 或按钮级模板匹配）")
     parser.add_argument("--exe", type=str, default=r"D:\\Program Files (x86)\\5211game\\11Loader.exe", help="要启动的程序路径")
     parser.add_argument("--model", type=str, default=str(ROOT / "runs" / "detect" / "train" / "weights" / "best.pt"), help="YOLO 权重路径")
     parser.add_argument("--save-dir", type=str, default=str(ROOT / "screen"), help="截屏与标注保存目录")
     parser.add_argument("--timeout", type=float, default=30.0, help="等待窗口出现的超时时间（秒）")
     parser.add_argument("--wait", type=float, default=5.0, help="窗口出现后额外等待的时间（秒）")
     parser.add_argument("--no-launch", action="store_true", help="不启动程序，仅当前屏幕上检测")
+    parser.add_argument("--source", type=str, default="", help="指定图像文件；留空则使用截屏")
+    # 检测方式与模板参数
+    parser.add_argument("--detect", type=str, choices=["yolo", "button"], default="button", help="检测方式：yolo 或 button(模板遮罩)")
+    parser.add_argument("--template", type=str, default=str(ROOT / "login.png"), help="按钮模板图（包含按钮）")
+    parser.add_argument("--threshold", type=float, default=0.6, help="模板匹配阈值")
+    parser.add_argument("--min-scale", type=float, default=0.6, help="模板最小缩放比")
+    parser.add_argument("--max-scale", type=float, default=1.6, help="模板最大缩放比")
+    parser.add_argument("--steps", type=int, default=21, help="缩放搜索步数")
+    parser.add_argument("--h-low", type=int, default=90, help="HSV H 下限 (蓝) 0-179")
+    parser.add_argument("--h-high", type=int, default=130, help="HSV H 上限 (蓝) 0-179")
+    parser.add_argument("--s-low", type=int, default=60, help="HSV S 下限 0-255")
+    parser.add_argument("--v-low", type=int, default=50, help="HSV V 下限 0-255")
     args = parser.parse_args()
 
     save_dir = Path(args.save_dir)
@@ -154,16 +236,38 @@ def main():
     else:
         print("跳过启动程序，直接截取当前屏幕。")
 
-    frame, screen_path = grab_fullscreen(save_dir)
+    # 获取检测帧：若提供 source 则直接读取，否则截屏
+    if args.source:
+        frame = cv2.imread(args.source, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise FileNotFoundError(f"无法读取图像: {args.source}")
+        screen_path = args.source
+        print(f"使用指定图像: {screen_path}")
+    else:
+        frame, screen_path = grab_fullscreen(save_dir)
 
     # 检测并输出位置
-    model_path = args.model
-    if not os.path.exists(model_path):
-        fallback = ROOT / "yolo11n.pt"
-        print(f"未找到模型 {model_path}，回退到 {fallback}（可能无法识别登录按钮）")
-        model_path = str(fallback)
-
-    info, ann_path = detect_login(model_path, frame, save_dir)
+    if args.detect == "yolo":
+        model_path = args.model
+        if not os.path.exists(model_path):
+            fallback = ROOT / "yolo11n.pt"
+            print(f"未找到模型 {model_path}，回退到 {fallback}（可能无法识别登录按钮）")
+            model_path = str(fallback)
+        info, ann_path = detect_login(model_path, frame, save_dir)
+    else:
+        info, ann_path = detect_login_by_button_template(
+            template_path=Path(args.template),
+            frame=frame,
+            save_dir=save_dir,
+            threshold=args.threshold,
+            min_scale=args.min_scale,
+            max_scale=args.max_scale,
+            steps=args.steps,
+            h_low=args.h_low,
+            h_high=args.h_high,
+            s_low=args.s_low,
+            v_low=args.v_low,
+        )
     if info is None:
         print("未检测到登录按钮。")
         return
@@ -179,7 +283,7 @@ def main():
     print(f"- 框(像素): x1={bbox_px[0]}, y1={bbox_px[1]}, x2={bbox_px[2]}, y2={bbox_px[3]}")
     print(f"- 中心(像素): x={center_px[0]}, y={center_px[1]}")
     print(f"- 中心(归一化): x={center_norm[0]:.4f}, y={center_norm[1]:.4f}")
-    print(f"- 置信度: {conf:.3f}")
+    print(f"- 置信度/匹配分数: {conf:.3f}")
     print(f"- 截屏: {screen_path}")
     print(f"- 标注图: {ann_path}")
 
