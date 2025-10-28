@@ -8,7 +8,7 @@ os.makedirs('img', exist_ok=True)
 model = YOLO('runs/detect/train/weights/best.pt')  # 'yolo11n' 即 YOLO11-nano 的简写
 
 # 测试推理（可选）
-imgname='login.png'
+imgname='11.jpg'
 # results = model('1.png')  # 替换为你的图像路径
 results = model(imgname)  # 替换为你的图像路径
 results[0].save(filename=f'img/result_{imgname}')  # 将检测结果保存到img目录下
