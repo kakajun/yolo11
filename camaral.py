@@ -13,6 +13,9 @@ from ultralytics import YOLO
 # 使用你提供的 RTSP 地址（更适合直接用 OpenCV/FFmpeg 打开）
 STREAM_URL = 'rtsp://192.168.0.102:554/rtp/34020000001110000001_34020000001320000002?originTypeStr=rtp_push'
 
+# 只识别的目标类别名称（按模型提供的 names 字典匹配），例如 'person'
+TARGET_CLASS = 'person'
+
 # 输出目录
 os.makedirs('img', exist_ok=True)
 
@@ -51,6 +54,8 @@ def run_stream(stream_url: str, infer_interval: float = 5.0, save_every_n: int =
     last_t = time.time()
     last_infer_time = 0.0
     fps = 0.0
+    # 上一次推理检测到的目标数量（用于周期保存判定）
+    last_person_count = 0
 
     # 创建一个可调整大小的窗口作为弹窗，并默认全屏显示
     cv2.namedWindow('YOLO11 Live', cv2.WINDOW_NORMAL)
@@ -85,8 +90,9 @@ def run_stream(stream_url: str, infer_interval: float = 5.0, save_every_n: int =
                 results = model(rgb)  # 返回 Results 列表
                 r = results[0]
 
-                # 绘制检测框（如果有）到原始 BGR 帧上
+                # 绘制检测框（仅对 TARGET_CLASS，例如 'person'）到原始 BGR 帧上
                 xyxy = getattr(r.boxes, 'xyxy', None)
+                person_count = 0
                 if xyxy is not None and len(r.boxes) > 0:
                     xyxy = r.boxes.xyxy.cpu().numpy()  # (N,4)
                     conf = r.boxes.conf.cpu().numpy()  # (N,)
@@ -95,21 +101,29 @@ def run_stream(stream_url: str, infer_interval: float = 5.0, save_every_n: int =
                         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
                         cls_id = int(cl)
                         cls_name = names.get(cls_id, str(cls_id))
+                        # 仅处理指定类别
+                        if cls_name.lower() != TARGET_CLASS.lower():
+                            continue
+                        person_count += 1
                         label = f"{cls_name} {c:.2f}"
                         cv2.rectangle(frame, (x1, y1),
                                       (x2, y2), (0, 255, 0), 2)
                         cv2.putText(frame, label, (x1, max(y1 - 6, 10)),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                # 在每次推理后保存带标注的截图（如果启用）
-                if save_on_infer:
+                # 记录上一次推理是否识别到目标（供周期性保存使用）
+                last_person_count = person_count
+
+                # 在每次推理后保存带标注的截图（仅当识别到目标且启用时）
+                if save_on_infer and person_count > 0:
                     # 按 年-月-日-时-分-秒 格式保存，字段之间用中划线连接，例如: 2025-10-29-14-30-05
                     timestr = time.strftime(
-                        '%Y-%m-%d-%H-%M-%S', time.localtime())
+                        '%Y-%m-%d_%H-%M-%S', time.localtime())
                     fname = os.path.join('img', f'result_infer_{timestr}.jpg')
                     try:
                         cv2.imwrite(fname, frame)
-                        print(f"已保存推理截图: {fname}")
+                        print(
+                            f"已保存推理截图: {fname} (检测到 {person_count} 个 {TARGET_CLASS})")
                     except Exception as e:
                         print(f"保存截图失败: {e}")
 
@@ -126,8 +140,8 @@ def run_stream(stream_url: str, infer_interval: float = 5.0, save_every_n: int =
                 frame, short_url, (10, frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
             cv2.imshow('YOLO11 Live', frame)
 
-            # 旧的按帧保存逻辑仍保留为备份（通常我们在每次推理时已保存）
-            if not save_on_infer and frame_idx % save_every_n == 0:
+            # 旧的按帧保存逻辑仍保留为备份：仅当开启周期保存且上次推理检测到目标时才保存
+            if not save_on_infer and frame_idx % save_every_n == 0 and last_person_count > 0:
                 timestr = time.strftime('%Y-%m-%d-%H-%M-%S', time.localtime())
                 fname = os.path.join('img', f'result_frame_{timestr}.jpg')
                 try:
