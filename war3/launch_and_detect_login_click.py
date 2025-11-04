@@ -12,7 +12,7 @@ import cv2
 
 
 # 引入按钮级模板匹配的辅助函数
-from template_detect_button import (
+from war3.template_detect_button import (
     build_button_mask_from_template,
     multi_scale_masked_match,
 )
@@ -29,7 +29,13 @@ except Exception:
     win32process = None
     win32api = None
 
-
+# 尝试导入封装的平滑鼠标模块（位于同一目录 war3/mouse_clicker.py）
+try:
+    import mouse_clicker
+    from mouse_clicker import move_mouse_and_click
+except Exception:
+    # 如果导入失败，后面仍然会有退化实现以保证功能
+    move_mouse_and_click = None
 ROOT = Path(__file__).parent
 
 
@@ -138,10 +144,22 @@ def detect_login(model_path: str, frame: np.ndarray, save_dir: Path):
 
 
 def move_mouse_and_click(x: int, y: int, delay: float = 0.08, double: bool = False):
-    """将鼠标移动到 (x, y) 并点击；优先使用 pywin32，回退到 ctypes。"""
+    """兼容封装：优先尝试使用 `war3/mouse_clicker.py` 中的平滑移动 + 点击逻辑。
+
+    如果模块不可用或调用失败，则退化为原来的快速实现（pywin32 或 ctypes）。
+    """
+    # 优先使用外部模块（若已成功导入为 mouse_clicker）
+    if 'mouse_clicker' in globals():
+        try:
+            # 直接调用模块中的实现（内部会做平滑移动）
+            return mouse_clicker.move_mouse_and_click(int(x), int(y), delay=delay, double=double)
+        except Exception:
+            # 若模块内部异常，回退到原有实现
+            pass
+
+    # 退化：原来的快速实现（保持兼容）
     x = int(x)
     y = int(y)
-    # 常量：左键按下/抬起
     LEFTDOWN = getattr(win32con, 'MOUSEEVENTF_LEFTDOWN', 0x0002)
     LEFTUP = getattr(win32con, 'MOUSEEVENTF_LEFTUP', 0x0004)
 
@@ -159,7 +177,6 @@ def move_mouse_and_click(x: int, y: int, delay: float = 0.08, double: bool = Fal
     except Exception:
         pass
 
-    # 回退：ctypes 调用 user32
     try:
         user32 = ctypes.windll.user32
         user32.SetCursorPos(x, y)
@@ -218,7 +235,8 @@ def detect_login_by_button_template(template_path: Path, frame: np.ndarray, save
     # 直接保存按钮级标注图
     vis = frame.copy()
     cv2.rectangle(vis, (bx1, by1), (bx2, by2), (0, 255, 0), 2)
-    cv2.putText(vis, f"score={score:.2f}", (bx1, max(0, by1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cv2.putText(vis, f"score={score:.2f}", (bx1, max(
+        0, by1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     cv2.imwrite(str(ann_path), vis)
 
     if score < threshold:
@@ -240,29 +258,42 @@ def detect_login_by_button_template(template_path: Path, frame: np.ndarray, save
 
 
 def main():
-    parser = argparse.ArgumentParser(description="启动/截屏后进行登录按钮定位并自动点击（支持 YOLO 或按钮级模板匹配）")
-    parser.add_argument("--exe", type=str, default=r"D:\\Program Files (x86)\\5211game\\11Loader.exe", help="要启动的程序路径")
-    parser.add_argument("--model", type=str, default=str(ROOT / "runs" / "detect" / "train" / "weights" / "best.pt"), help="YOLO 权重路径")
-    parser.add_argument("--save-dir", type=str, default=str(ROOT / "screen"), help="截屏与标注保存目录")
-    parser.add_argument("--timeout", type=float, default=30.0, help="等待窗口出现的超时时间（秒）")
-    parser.add_argument("--wait", type=float, default=5.0, help="窗口出现后额外等待的时间（秒）")
-    parser.add_argument("--no-launch", action="store_true", help="不启动程序，仅当前屏幕上检测")
-    parser.add_argument("--source", type=str, default="", help="指定图像文件；留空则使用截屏")
+    parser = argparse.ArgumentParser(
+        description="启动/截屏后进行登录按钮定位并自动点击（支持 YOLO 或按钮级模板匹配）")
+    parser.add_argument(
+        "--exe", type=str, default=r"D:\\Program Files (x86)\\5211game\\11Loader.exe", help="要启动的程序路径")
+    parser.add_argument("--model", type=str, default=str(ROOT / "runs" /
+                        "detect" / "train" / "weights" / "best.pt"), help="YOLO 权重路径")
+    parser.add_argument("--save-dir", type=str,
+                        default=str(ROOT / "screen"), help="截屏与标注保存目录")
+    parser.add_argument("--timeout", type=float,
+                        default=30.0, help="等待窗口出现的超时时间（秒）")
+    parser.add_argument("--wait", type=float, default=5.0,
+                        help="窗口出现后额外等待的时间（秒）")
+    parser.add_argument("--no-launch", action="store_true",
+                        help="不启动程序，仅当前屏幕上检测")
+    parser.add_argument("--source", type=str, default="",
+                        help="指定图像文件；留空则使用截屏")
     # 检测方式与模板参数
-    parser.add_argument("--detect", type=str, choices=["yolo", "button"], default="button", help="检测方式：yolo 或 button(模板遮罩)")
-    parser.add_argument("--template", type=str, default=str(ROOT / "login.png"), help="按钮模板图（包含按钮）")
+    parser.add_argument("--detect", type=str, choices=[
+                        "yolo", "button"], default="button", help="检测方式：yolo 或 button(模板遮罩)")
+    parser.add_argument("--template", type=str,
+                        default=str(ROOT / "login.png"), help="按钮模板图（包含按钮）")
     parser.add_argument("--threshold", type=float, default=0.6, help="模板匹配阈值")
     parser.add_argument("--min-scale", type=float, default=0.6, help="模板最小缩放比")
     parser.add_argument("--max-scale", type=float, default=1.6, help="模板最大缩放比")
     parser.add_argument("--steps", type=int, default=21, help="缩放搜索步数")
-    parser.add_argument("--h-low", type=int, default=90, help="HSV H 下限 (蓝) 0-179")
-    parser.add_argument("--h-high", type=int, default=130, help="HSV H 上限 (蓝) 0-179")
+    parser.add_argument("--h-low", type=int, default=90,
+                        help="HSV H 下限 (蓝) 0-179")
+    parser.add_argument("--h-high", type=int, default=130,
+                        help="HSV H 上限 (蓝) 0-179")
     parser.add_argument("--s-low", type=int, default=60, help="HSV S 下限 0-255")
     parser.add_argument("--v-low", type=int, default=50, help="HSV V 下限 0-255")
     # 点击控制
     parser.add_argument("--no-click", action="store_true", help="禁用自动点击（默认启用）")
     parser.add_argument("--double", action="store_true", help="使用双击")
-    parser.add_argument("--click-delay", type=float, default=0.08, help="移动到中心后点击的等待秒数")
+    parser.add_argument("--click-delay", type=float,
+                        default=0.08, help="移动到中心后点击的等待秒数")
     args = parser.parse_args()
 
     save_dir = Path(args.save_dir)
@@ -325,7 +356,8 @@ def main():
 
     print("检测结果：")
     print(f"- 屏幕尺寸: {screen_size[0]}x{screen_size[1]}")
-    print(f"- 框(像素): x1={bbox_px[0]}, y1={bbox_px[1]}, x2={bbox_px[2]}, y2={bbox_px[3]}")
+    print(
+        f"- 框(像素): x1={bbox_px[0]}, y1={bbox_px[1]}, x2={bbox_px[2]}, y2={bbox_px[3]}")
     print(f"- 中心(像素): x={center_px[0]}, y={center_px[1]}")
     print(f"- 中心(归一化): x={center_norm[0]:.4f}, y={center_norm[1]:.4f}")
     print(f"- 置信度/匹配分数: {conf:.3f}")
@@ -334,9 +366,11 @@ def main():
 
     # 自动点击：默认启用，除非 --no-click
     if not args.no_click:
-        ok = move_mouse_and_click(center_px[0], center_px[1], delay=args.click_delay, double=args.double)
+        ok = move_mouse_and_click(
+            center_px[0], center_px[1], delay=args.click_delay, double=args.double)
         if ok:
-            print(f"已移动鼠标到中心点并点击: x={center_px[0]}, y={center_px[1]}{' (双击)' if args.double else ''}")
+            print(
+                f"已移动鼠标到中心点并点击: x={center_px[0]}, y={center_px[1]}{' (双击)' if args.double else ''}")
         else:
             print("尝试点击失败：你的系统可能缺少 pywin32，且 ctypes 调用未成功。")
 

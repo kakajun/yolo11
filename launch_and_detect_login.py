@@ -11,7 +11,7 @@ import cv2
 from ultralytics import YOLO
 
 # 引入按钮级模板匹配的辅助函数
-from template_detect_button import (
+from war3.template_detect_button import (
     build_button_mask_from_template,
     multi_scale_masked_match,
 )
